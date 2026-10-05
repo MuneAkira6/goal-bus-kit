@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: ubuntu (${{ matrix.awk }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        awk: [gawk, mawk]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install both awk implementations and jq
+        run: sudo apt-get update -q && sudo apt-get install -y -q gawk mawk jq
+      - name: Show the substrate the hooks will run on
+        run: |
+          bash --version | head -n 1
+          ${{ matrix.awk }} -W version 2>&1 | head -n 1
+          jq --version
+      - name: Run every suite with this awk
+        run: GOALBUS_AWK=${{ matrix.awk }} bash tests/run-all.sh
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          shellcheck --version | head -n 2
+          shellcheck -S warning -x hooks/goal-bus.sh hooks/evidence-gate.sh hooks/lib/common.sh \
+            hooks/bin/*.sh hooks/selftest/*.sh hooks/selftest/fake-claude install.sh tests/*.sh
+
+  windows:
+    name: windows (Git Bash)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show the substrate
+        run: |
+          bash --version | head -n 1
+          awk --version | head -n 1
+          jq --version
+      - name: Run every suite
+        run: bash tests/run-all.sh
