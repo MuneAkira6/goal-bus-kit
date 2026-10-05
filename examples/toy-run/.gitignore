@@ -1,0 +1,3 @@
+# installed by launch.sh (a copy of the kit's hooks plus local settings)
+.claude/
+app/node_modules/
