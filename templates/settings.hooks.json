@@ -1,0 +1,37 @@
+{
+  "__how_to_use": "install.sh writes this file as .claude/settings.local.json when none exists. Otherwise merge the 'hooks' and 'permissions' blocks into your settings by hand and drop both __ keys.",
+  "__why": "Both hooks run when a turn stops. The relay's timeout has to be longer than a review, a handoff and a seeding together (REVIEW_TIMEOUT + 2 * HANDOFF_TIMEOUT + 60, which is 2400 s with the defaults; 2520 adds a margin), because Claude Code kills a hook that overruns and the paid review is then lost. The evidence gate only runs awk, so 20 s is enough. Nobody is there to answer prompts, so the mode is bypassPermissions; acceptEdits would stop at the first shell command. The deny list is what keeps commits, pushes, pull requests and releases with the human: deny rules are checked before allow rules, bypass does not skip them, and the bus's headless calls inherit them. Nothing stops a session from creating a branch unless you add rules such as Bash(git switch:*), Bash(git branch:*) and Bash(git checkout -b:*).",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-$PWD}/.claude/hooks/evidence-gate.sh\"",
+            "shell": "bash",
+            "statusMessage": "evidence gate: reading PROGRESS.md",
+            "timeout": 20,
+            "type": "command"
+          },
+          {
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-$PWD}/.claude/hooks/goal-bus.sh\"",
+            "shell": "bash",
+            "statusMessage": "goal bus: relaying this turn",
+            "timeout": 2520,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr close:*)",
+      "Bash(gh release create:*)"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}
