@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# fake-claude — stands in for the claude CLI during the selftests. It never calls any API.
+# It answers like `claude -p ... --output-format json` and appends the reply to a fake transcript,
+# so the hooks can be tested end to end. Behaviour comes from files in $FAKE_DIR; a file named
+# "<name>.<n>" applies to the n-th call only and wins over "<name>":
+#   reply          assistant text to return (default: a PASS verdict with a NEXT block)
+#   is_error       "true" to report an error result (default false)
+#   exit_code      process exit status (default 0)
+#   stderr         text to print on stderr, e.g. a usage-limit notice
+#   ctx            context tokens recorded in the transcript's last usage entry (default 1000)
+#   cost           total_cost_usd to report (default 0.5)
+#   no_transcript  if present, no transcript entry is written
+#   no_handoff     if present, a rotation handoff request does not write BUS-HANDOFF.md
+#   no_ready       if present, a seeding request is not answered with BUS-READY
+# Each call appends one line to $FAKE_DIR/calls.log and saves its prompt as $FAKE_DIR/prompt.<n>.
+# If FAKE_ENVMARK is set in the caller's environment, "<n> <value>" goes to $FAKE_DIR/envmarks.log.
+set -u
+D="${FAKE_DIR:?FAKE_DIR is not set}"
+mkdir -p "$D"
+n=0; [ -f "$D/count" ] && read -r n < "$D/count"; n=$(( ${n:-0} + 1 )); echo "$n" > "$D/count"
+all="$*"; sid=""; mode=""; prompt=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --resume|-r) mode=resume; sid="${2:-}"; shift 2 ;;
+    --session-id) mode=new; sid="${2:-}"; shift 2 ;;
+    -p|--print) shift; if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then prompt="$1"; shift; fi ;;
+    --model|--output-format|--allowedTools|--allowed-tools|--permission-mode) shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s|child=%s|mode=%s|sid=%s|args=%s\n' "$n" "${GOALBUS_NESTED:-}" "$mode" "$sid" "$all" >> "$D/calls.log"
+printf '%s' "$prompt" > "$D/prompt.$n"
+if [ -n "${FAKE_ENVMARK:-}" ]; then printf '%s %s\n' "$n" "$FAKE_ENVMARK" >> "$D/envmarks.log"; fi
+pick() {
+  local f="" v=""
+  if [ -f "$D/$1.$n" ]; then f="$D/$1.$n"; elif [ -f "$D/$1" ]; then f="$D/$1"; fi
+  if [ -n "$f" ]; then IFS= read -r -d '' v < "$f"; printf '%s' "$v"; else printf '%s' "$2"; fi
+}
+
+reply="$(pick reply "$(printf 'I checked it.\nBUS-VERDICT: PASS\nBUS-NEXT-BEGIN\nNext goal.\nBUS-NEXT-END')")"
+case "$prompt" in
+  *"BUS-HANDOFF.md for your successor"*)
+    [ -f "$D/no_handoff" ] || printf 'handoff written by call %s\n' "$n" >> "${FAKE_TASK_DIR:?}/BUS-HANDOFF.md"
+    reply="HANDOFF-WRITTEN" ;;
+  *"reply with the single line BUS-READY"*)
+    if [ -f "$D/no_ready" ]; then reply="I read the files."; else reply="BUS-READY"; fi ;;
+esac
+ie="$(pick is_error false)"; ctx="$(pick ctx 1000)"; cost="$(pick cost 0.5)"; rc="$(pick exit_code 0)"
+
+if [ ! -f "$D/no_transcript" ] && [ -n "$sid" ]; then
+  tdir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/fake-project"
+  mkdir -p "$tdir"
+  jq -cn --arg t "$reply" --argjson c "$ctx" \
+    '{type: "assistant", message: {content: [{type: "text", text: $t}],
+      usage: {input_tokens: 1, cache_read_input_tokens: ($c - 1), cache_creation_input_tokens: 0}}}' \
+    | tr -d '\r' >> "$tdir/$sid.jsonl"
+fi
+err="$(pick stderr "")"; [ -n "$err" ] && printf '%s\n' "$err" >&2
+if [ "$ie" = true ]; then
+  jq -cn --arg s "$sid" '{type: "result", is_error: true, result: "", session_id: $s}' | tr -d '\r'
+else
+  jq -cn --arg r "$reply" --argjson cost "$cost" --arg s "$sid" \
+    '{type: "result", is_error: false, result: $r, total_cost_usd: $cost, session_id: $s}' | tr -d '\r'
+fi
+exit "$rc"
